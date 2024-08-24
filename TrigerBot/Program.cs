@@ -12,6 +12,8 @@ namespace TrigerBot
         private static bool _running = false;
         private static CancellationTokenSource _cts = new CancellationTokenSource();
         private static Task _botTask;
+        private static int _maxRuns = 2; // Максимальна кількість запусків бота
+        private static int _currentRun = 0; // Поточний запуск
 
         [DllImport("user32.dll")]
         private static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, IntPtr dwExtraInfo);
@@ -25,13 +27,21 @@ namespace TrigerBot
 
         public static Bitmap CaptureScreen()
         {
-            Rectangle screenArea = new Rectangle(0, 0, 960, 1080); // Перша половина екрану 1920x1080
-            Bitmap bitmap = new Bitmap(screenArea.Width, screenArea.Height);
-            using (Graphics g = Graphics.FromImage(bitmap))
+            try
             {
-                g.CopyFromScreen(screenArea.Location, Point.Empty, screenArea.Size);
+                Rectangle screenArea = new Rectangle(0, 0, 960, 1080); // Перша половина екрану 1920x1080
+                Bitmap bitmap = new Bitmap(screenArea.Width, screenArea.Height);
+                using (Graphics g = Graphics.FromImage(bitmap))
+                {
+                    g.CopyFromScreen(screenArea.Location, Point.Empty, screenArea.Size);
+                }
+                return bitmap;
             }
-            return bitmap;
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Помилка при захопленні екрану: {ex.Message}");
+                return null;
+            }
         }
 
         private static bool IsGreenStar(Color color)
@@ -57,6 +67,8 @@ namespace TrigerBot
 
         public static Point? FindStar(Bitmap bitmap)
         {
+            if (bitmap == null) return null;
+
             for (int x = 0; x < bitmap.Width; x += 3) // Перевірка кожного третього пікселя для пришвидшення
             {
                 for (int y = 0; y < bitmap.Height; y += 3)
@@ -73,8 +85,10 @@ namespace TrigerBot
 
         public static Point? FindRedButton(Bitmap bitmap)
         {
+            if (bitmap == null) return null;
+
             // Визначення висоти для перевірки зверху
-            int searchHeight = 150;
+            int searchHeight = 250;
 
             // Пошук зліва направо
             for (int x = 0; x < bitmap.Width; x += 3)
@@ -114,14 +128,22 @@ namespace TrigerBot
                 try
                 {
                     Bitmap screen = CaptureScreen();
-                    Point? starLocation = FindStar(screen);
-                    if (starLocation.HasValue)
+                    if (screen != null)
                     {
-                        MoveMouseTo(starLocation.Value);
+                        Point? starLocation = FindStar(screen);
+                        if (starLocation.HasValue)
+                        {
+                            MoveMouseTo(starLocation.Value);
+                        }
+                        Console.WriteLine($"Час до завершення: {countdown} секунд");
+                        countdown--;
+                        await Task.Delay(70, token); // Асинхронна затримка
                     }
-                    Console.WriteLine($"Час до завершення: {countdown} секунд");
-                    countdown--;
-                    await Task.Delay(70, token); // Асинхронна затримка
+                    else
+                    {
+                        Console.WriteLine("Не вдалося захопити екран.");
+                        break;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -132,32 +154,51 @@ namespace TrigerBot
 
             // Безперервний пошук червоної кнопки після завершення зворотного відліку
             bool redButtonFound = false;
-            while (!token.IsCancellationRequested && !redButtonFound)
+            if (_currentRun < _maxRuns - 1)
             {
-                try
+                // Якщо це не останній запуск, продовжити пошук червоної кнопки
+                while (!token.IsCancellationRequested && !redButtonFound)
                 {
-                    Bitmap finalScreen = CaptureScreen();
-                    Point? redButtonLocation = FindRedButton(finalScreen);
-                    if (redButtonLocation.HasValue)
+                    try
                     {
-                        MoveMouseTo(redButtonLocation.Value);
-                        Console.WriteLine("Червона кнопка натиснута.");
-                        redButtonFound = true;
+                        Bitmap finalScreen = CaptureScreen();
+                        if (finalScreen != null)
+                        {
+                            Point? redButtonLocation = FindRedButton(finalScreen);
+                            if (redButtonLocation.HasValue)
+                            {
+                                MoveMouseTo(redButtonLocation.Value);
+                                Console.WriteLine("Червона кнопка натиснута.");
+                                redButtonFound = true;
+                            }
+                            else
+                            {
+                                Console.WriteLine("Червона кнопка не знайдена. Шукаю знову...");
+                            }
+                            await Task.Delay(1000, token); // Асинхронна затримка між спробами
+                        }
+                        else
+                        {
+                            Console.WriteLine("Не вдалося захопити екран.");
+                            break;
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        Console.WriteLine("Червона кнопка не знайдена. Шукаю знову...");
+                        Console.WriteLine($"Помилка при знаходженні або натисканні червоної кнопки: {ex.Message}");
                     }
-                    await Task.Delay(1000, token); // Асинхронна затримка між спробами
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Помилка при знаходженні або натисканні червоної кнопки: {ex.Message}");
                 }
             }
+            else
+            {
+                // Останній запуск, не натискати червону кнопку
+                Console.WriteLine("Останній запуск. Не натискаю червону кнопку.");
+            }
 
-            // Перезапуск бота після натискання червоної кнопки
-            if (!token.IsCancellationRequested)
+            _currentRun++; // Збільшуємо лічильник запусків
+
+            // Перезапуск бота, якщо ліміт запусків не досягнуто
+            if (!token.IsCancellationRequested && _currentRun < _maxRuns)
             {
                 _cts = new CancellationTokenSource();
                 _botTask = Task.Run(() => StartBotAsync(_cts.Token));
