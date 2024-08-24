@@ -73,9 +73,14 @@ namespace TrigerBot
 
         public static Point? FindRedButton(Bitmap bitmap)
         {
-            for (int x = 0; x < bitmap.Width; x += 3) // Перевірка кожного третього пікселя для пришвидшення
+            // Визначення висоти для перевірки зверху
+            int searchHeight = 150;
+
+            // Пошук зліва направо
+            for (int x = 0; x < bitmap.Width; x += 3)
             {
-                for (int y = 0; y < bitmap.Height; y += 3)
+                // Перевірка знизу вгору, але не більше ніж 150 пікселів від нижнього краю
+                for (int y = bitmap.Height - 1; y >= Math.Max(0, bitmap.Height - searchHeight); y -= 3)
                 {
                     Color pixelColor = bitmap.GetPixel(x, y);
                     if (IsRedButton(pixelColor))
@@ -89,7 +94,7 @@ namespace TrigerBot
 
         public static void MoveMouseTo(Point point)
         {
-            Cursor.Position = new Point(point.X, point.Y);
+            Cursor.Position = point;
             MouseEvent(MouseEventFlags.LeftDown);
             MouseEvent(MouseEventFlags.LeftUp);
         }
@@ -99,10 +104,10 @@ namespace TrigerBot
             mouse_event((uint)value, 0, 0, 0, IntPtr.Zero);
         }
 
-        public static void StartBot(CancellationToken token)
+        public static async Task StartBotAsync(CancellationToken token)
         {
             _running = true;
-            int countdown = 250;
+            int countdown = 280;
 
             while (!token.IsCancellationRequested && countdown > 0)
             {
@@ -114,39 +119,54 @@ namespace TrigerBot
                     {
                         MoveMouseTo(starLocation.Value);
                     }
-                    Console.WriteLine($"Time remaining: {countdown} seconds");
+                    Console.WriteLine($"Час до завершення: {countdown} секунд");
                     countdown--;
-                    Thread.Sleep(80); // Increase delay for debugging
+                    await Task.Delay(70, token); // Асинхронна затримка
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error during bot operation: {ex.Message}");
+                    Console.WriteLine($"Помилка під час роботи бота: {ex.Message}");
                     break;
                 }
             }
 
-            // Find and click the red button after bot's task is complete
-            try
+            // Безперервний пошук червоної кнопки після завершення зворотного відліку
+            bool redButtonFound = false;
+            while (!token.IsCancellationRequested && !redButtonFound)
             {
-                Bitmap finalScreen = CaptureScreen();
-                Point? redButtonLocation = FindRedButton(finalScreen);
-                if (redButtonLocation.HasValue)
+                try
                 {
-                    MoveMouseTo(redButtonLocation.Value);
-                    Console.WriteLine("Red button clicked.");
+                    Bitmap finalScreen = CaptureScreen();
+                    Point? redButtonLocation = FindRedButton(finalScreen);
+                    if (redButtonLocation.HasValue)
+                    {
+                        MoveMouseTo(redButtonLocation.Value);
+                        Console.WriteLine("Червона кнопка натиснута.");
+                        redButtonFound = true;
+                    }
+                    else
+                    {
+                        Console.WriteLine("Червона кнопка не знайдена. Шукаю знову...");
+                    }
+                    await Task.Delay(1000, token); // Асинхронна затримка між спробами
                 }
-                else
+                catch (Exception ex)
                 {
-                    Console.WriteLine("Red button not found.");
+                    Console.WriteLine($"Помилка при знаходженні або натисканні червоної кнопки: {ex.Message}");
                 }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error finding or clicking red button: {ex.Message}");
             }
 
-            _running = false;
-            Console.WriteLine("Bot stopped automatically after 40 seconds.");
+            // Перезапуск бота після натискання червоної кнопки
+            if (!token.IsCancellationRequested)
+            {
+                _cts = new CancellationTokenSource();
+                _botTask = Task.Run(() => StartBotAsync(_cts.Token));
+            }
+            else
+            {
+                _running = false;
+                Console.WriteLine("Бот зупинено.");
+            }
         }
 
         static void Main(string[] args)
@@ -157,45 +177,46 @@ namespace TrigerBot
                 {
                     _cts.Cancel();
                     _botTask.Wait();
-                    Console.WriteLine("Bot stopped by Ctrl+C.");
+                    Console.WriteLine("Бот зупинено через Ctrl+C.");
                 }
                 e.Cancel = true; // Запобігає завершенню програми при натисканні Ctrl+C
             };
 
-            Console.WriteLine("Type '1' to start the bot or '0' to stop it. Press Ctrl+C to stop the bot as well.");
+            Console.WriteLine("Введіть '1', щоб запустити бота, або '0', щоб зупинити його. Натисніть Ctrl+C, щоб зупинити бота також.");
 
             while (true)
             {
                 string input = Console.ReadLine();
-                if (input.Equals("1", StringComparison.OrdinalIgnoreCase)) // Використовуємо '1' для старту
+                if (input.Equals("1", StringComparison.OrdinalIgnoreCase)) // Використовуйте '1' для запуску
                 {
                     if (!_running)
                     {
                         _cts = new CancellationTokenSource();
-                        _botTask = Task.Run(() => StartBot(_cts.Token));
-                        Console.WriteLine("Bot started.");
+                        _botTask = Task.Run(() => StartBotAsync(_cts.Token));
+                        Console.WriteLine("Бот запущено.");
                     }
                     else
                     {
-                        Console.WriteLine("Bot is already running.");
+                        Console.WriteLine("Бот вже працює.");
                     }
                 }
-                else if (input.Equals("0", StringComparison.OrdinalIgnoreCase)) // Використовуємо '0' для зупинки
+                else if (input.Equals("0", StringComparison.OrdinalIgnoreCase)) // Використовуйте '0' для зупинки
                 {
                     if (_running)
                     {
                         _cts.Cancel();
                         _botTask.Wait();
-                        Console.WriteLine("Bot stopped.");
+                        _running = false;
+                        Console.WriteLine("Бот зупинено.");
                     }
                     else
                     {
-                        Console.WriteLine("Bot is not running.");
+                        Console.WriteLine("Бот не працює.");
                     }
                 }
                 else
                 {
-                    Console.WriteLine("Invalid command. Type '1' to start the bot or '0' to stop it.");
+                    Console.WriteLine("Невірна команда. Введіть '1', щоб запустити бота, або '0', щоб зупинити його.");
                 }
             }
         }
